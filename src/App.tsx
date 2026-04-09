@@ -16,7 +16,7 @@ export default function App() {
   const sceneItems = useStore(s => s.sceneItems);
 
   return (
-    <div className="w-full h-screen bg-black">
+    <div className="w-full h-screen bg-black select-none">
       <Canvas shadows camera={{ fov: 75 }}>
         <color attach="background" args={['#111']} />
         <Suspense fallback={

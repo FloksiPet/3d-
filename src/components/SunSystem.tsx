@@ -45,11 +45,29 @@ export function SunSystem() {
   const sunZ = -Math.cos(angle) * 100;
   const sunY = Math.max(elevation * 100, -10); // Don't go too far below ground
 
-  const isDay = elevation > 0;
-  const intensity = isDay ? Math.min(elevation * 3, 1.5) : 0.05;
-  const sunColor = isDay ? new THREE.Color('#fff5e6').lerp(new THREE.Color('#ffffff'), elevation) : new THREE.Color('#1a1a2e');
+  const isOutside = useStore(s => s.isOutside);
+  const buildMode = useStore(s => s.buildMode);
+
+  const isDay = buildMode ? true : elevation > 0;
+  // If inside and not in build mode, global sun is turned off
+  const targetSunIntensity = buildMode ? 1.0 : (isOutside && isDay ? Math.min(elevation * 3, 1.5) : 0.0);
+  const sunColor = buildMode ? new THREE.Color('#ffffff') : (isDay ? new THREE.Color('#fff5e6').lerp(new THREE.Color('#ffffff'), elevation) : new THREE.Color('#1a1a2e'));
+
+  // When inside, the hemisphere light (sky ambient) should be very dim so windows act as portals
+  // The user requested to remove the "default" light inside the room, so we set it to 0 when inside.
+  const targetAmbient = buildMode ? 0.5 : (isOutside ? (isDay ? 0.3 : 0.05) : 0.0);
 
   const targetRef = useRef<THREE.Object3D>(null);
+  const hemiRef = useRef<THREE.HemisphereLight>(null);
+
+  useFrame((state, delta) => {
+    if (hemiRef.current) {
+      hemiRef.current.intensity = THREE.MathUtils.lerp(hemiRef.current.intensity, targetAmbient, delta * 2);
+    }
+    if (sunRef.current) {
+      sunRef.current.intensity = THREE.MathUtils.lerp(sunRef.current.intensity, targetSunIntensity * 1.2, delta * 2);
+    }
+  });
 
   return (
     <>
@@ -65,10 +83,9 @@ export function SunSystem() {
       
       <directionalLight
         ref={sunRef}
-        castShadow={isDay}
+        castShadow={!buildMode && isDay}
         position={[sunX, sunY, sunZ]}
         target={targetRef.current || undefined}
-        intensity={intensity}
         color={sunColor}
         shadow-mapSize-width={4096}
         shadow-mapSize-height={4096}
@@ -79,14 +96,15 @@ export function SunSystem() {
         shadow-camera-near={0.1}
         shadow-camera-far={300}
         shadow-bias={-0.0005}
-        shadow-normalBias={0.02}
+        shadow-normalBias={0.01}
       />
 
       {/* Hemisphere light simulates global illumination / bounced light from sky and ground */}
       <hemisphereLight 
+        ref={hemiRef}
         color={isDay ? "#ffffff" : "#222244"} 
         groundColor={isDay ? "#8B7355" : "#111111"} 
-        intensity={isDay ? 0.3 : 0.05} 
+        intensity={targetAmbient} 
       />
     </>
   );

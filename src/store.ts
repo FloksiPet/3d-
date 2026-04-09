@@ -66,6 +66,8 @@ type State = {
   lookDelta: { x: number; y: number };
   spawn: { pos: [number, number, number]; rotY: number };
   layout: BuildingLayout;
+  isOutside: boolean;
+  setIsOutside: (val: boolean) => void;
   
   gameTime: number; // Minutes from midnight
   sunOffset: number; // Manual offset for offline mode
@@ -141,6 +143,8 @@ export const useStore = create<State>((set) => ({
   lookDelta: { x: 0, y: 0 },
   spawn: { pos: [1.5, 1, 1.5], rotY: 0 },
   layout: DEFAULT,
+  isOutside: false,
+  setIsOutside: (val) => set({ isOutside: val }),
 
   gameTime: 0,
   sunOffset: 0,

@@ -1,18 +1,20 @@
 import { RigidBody, CuboidCollider, CylinderCollider } from '@react-three/rapier';
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store';
-
+import { CompiledWall } from './CompiledWall';
+import { MeshPortalMaterial } from '@react-three/drei';
+import { Landscape } from './Landscape';
 import { DEFAULT, TILE, T, DOOR_W, DOOR_H, SHOW_GRID } from '../constants';
 import type { BuildingLayout, Cell } from '../constants';
 
-function SolidWall({ pos, size, rotation = [0, 0, 0], color = "#c8b89a" }: { key?: React.Key; pos: [number, number, number]; size: [number, number, number]; rotation?: [number, number, number]; color?: string }) {
+function SolidWall({ pos, size, rotation = [0, 0, 0], color = "#c8b89a", userData }: { key?: React.Key; pos: [number, number, number]; size: [number, number, number]; rotation?: [number, number, number]; color?: string; userData?: any }) {
   return (
-    <RigidBody type="fixed" position={pos} rotation={rotation}>
-      <mesh castShadow receiveShadow>
+    <RigidBody type="fixed" position={pos} rotation={rotation} userData={userData}>
+      <mesh castShadow receiveShadow userData={userData}>
         <boxGeometry args={size} />
-        <meshStandardMaterial color={color} />
+        <meshStandardMaterial color={color} roughness={0.8} />
       </mesh>
     </RigidBody>
   );
@@ -155,42 +157,133 @@ function InteractiveDoor({ id, axis, pos, rotation = 0, slideDir, isExit, isLock
 
 
 function Window({ struct }: { struct: any }) {
+  // Make window slightly thicker than the wall (T) to prevent z-fighting
+  const windowT = T + 0.02;
+  const frameT = T + 0.04;
+
+  const gameTime = useStore(s => s.gameTime);
+  const sunOffset = useStore(s => s.sunOffset);
+  
+  const totalMinutes = (gameTime + sunOffset) % 1440;
+  const angle = ((totalMinutes - 720) / 720) * Math.PI;
+  const elevation = Math.sin((totalMinutes - 360) / 720 * Math.PI) * 0.8;
+  const isDay = elevation > 0;
+  const skyColor = isDay ? new THREE.Color('#aaccff').lerp(new THREE.Color('#ffffff'), elevation) : new THREE.Color('#1a1a2e');
+  const sunColor = isDay ? new THREE.Color('#fff5e6').lerp(new THREE.Color('#ffffff'), elevation) : new THREE.Color('#1a1a2e');
+  
+  const sunX = -Math.sin(angle) * 100;
+  const sunZ = -Math.cos(angle) * 100;
+  const sunY = Math.max(elevation * 100, -10);
+
   return (
     <group position={[struct.position[0], struct.position[1] || 1.5, struct.position[2]]} rotation={[0, struct.rotation, 0]}>
-      {/* Glass */}
+      {/* Glass / Screen */}
       <mesh castShadow={false} receiveShadow={false}>
-        <boxGeometry args={[0.8, 1.2, T * 0.5]} />
-        <meshPhysicalMaterial 
-          color="#ffffff" 
-          transparent 
-          opacity={0.1} 
-          transmission={0.95}
-          roughness={0.05}
-          thickness={0.1}
-          ior={1.5}
-        />
+        <boxGeometry args={[0.8, 1.2, windowT]} />
+        <MeshPortalMaterial blur={0} resolution={512}>
+          <color attach="background" args={[skyColor]} />
+          <ambientLight intensity={isDay ? 0.5 : 0.1} />
+          {isDay && (
+            <directionalLight 
+              position={[sunX, sunY, sunZ]} 
+              intensity={1.5} 
+              color={sunColor} 
+            />
+          )}
+          <group position={[-struct.position[0], -(struct.position[1] || 1.5), -struct.position[2]]}>
+            <Landscape />
+          </group>
+        </MeshPortalMaterial>
       </mesh>
 
       {/* Frame Top */}
       <mesh position={[0, 0.625, 0]} castShadow receiveShadow>
-        <boxGeometry args={[0.9, 0.05, T * 1.1]} />
+        <boxGeometry args={[0.9, 0.05, frameT]} />
         <meshStandardMaterial color="#ffffff" />
       </mesh>
       {/* Frame Bottom */}
       <mesh position={[0, -0.625, 0]} castShadow receiveShadow>
-        <boxGeometry args={[0.9, 0.05, T * 1.1]} />
+        <boxGeometry args={[0.9, 0.05, frameT]} />
         <meshStandardMaterial color="#ffffff" />
       </mesh>
       {/* Frame Left */}
       <mesh position={[-0.425, 0, 0]} castShadow receiveShadow>
-        <boxGeometry args={[0.05, 1.2, T * 1.1]} />
+        <boxGeometry args={[0.05, 1.2, frameT]} />
         <meshStandardMaterial color="#ffffff" />
       </mesh>
       {/* Frame Right */}
       <mesh position={[0.425, 0, 0]} castShadow receiveShadow>
-        <boxGeometry args={[0.05, 1.2, T * 1.1]} />
+        <boxGeometry args={[0.05, 1.2, frameT]} />
         <meshStandardMaterial color="#ffffff" />
       </mesh>
+    </group>
+  );
+}
+
+function WindowLight({ windowStruct, disableSpotLight }: { windowStruct: any, disableSpotLight?: boolean }) {
+  const target = React.useMemo(() => new THREE.Object3D(), []);
+  
+  const gameTime = useStore(s => s.gameTime);
+  const sunOffset = useStore(s => s.sunOffset);
+  
+  const totalMinutes = (gameTime + sunOffset) % 1440;
+  const angle = ((totalMinutes - 720) / 720) * Math.PI;
+  const elevation = Math.sin((totalMinutes - 360) / 720 * Math.PI) * 0.8;
+  
+  const sunX = -Math.sin(angle);
+  const sunZ = -Math.cos(angle);
+  const sunY = Math.max(elevation, -0.1);
+  
+  const sunDir = new THREE.Vector3(sunX, sunY, sunZ).normalize();
+  
+  const rotY = windowStruct.rotation || 0;
+  const normal = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+  
+  const dot = normal.dot(sunDir);
+  const isDay = elevation > 0;
+  
+  const baseIntensity = isDay ? Math.min(elevation * 3, 1.5) : 0;
+  const spotIntensity = Math.max(0, dot) * baseIntensity * 15;
+  const ambientIntensity = isDay ? baseIntensity * 1.5 : 0;
+  
+  const color = isDay ? new THREE.Color('#fff5e6').lerp(new THREE.Color('#ffffff'), elevation) : new THREE.Color('#1a1a2e');
+  const ambientColor = isDay ? new THREE.Color('#aaccff').lerp(new THREE.Color('#ffffff'), elevation) : new THREE.Color('#1a1a2e');
+  
+  const spotPos = new THREE.Vector3(windowStruct.position[0], windowStruct.position[1] || 1.5, windowStruct.position[2]);
+  
+  // Target is along the light ray direction (-sunDir)
+  target.position.copy(spotPos).add(new THREE.Vector3(-sunDir.x, -sunDir.y, -sunDir.z).multiplyScalar(5));
+  
+  return (
+    <group>
+      <primitive object={target} />
+      
+      {/* Soft portal light */}
+      {ambientIntensity > 0.01 && (
+        <pointLight
+          position={[spotPos.x - normal.x * 0.5, spotPos.y, spotPos.z - normal.z * 0.5]}
+          intensity={ambientIntensity}
+          color={ambientColor}
+          distance={10}
+          decay={2}
+        />
+      )}
+
+      {/* Direct sun beam */}
+      {!disableSpotLight && spotIntensity > 0.01 && (
+        <spotLight
+          position={[spotPos.x, spotPos.y, spotPos.z]}
+          target={target}
+          intensity={spotIntensity}
+          color={color}
+          angle={Math.PI / 6}
+          penumbra={0.1}
+          castShadow
+          shadow-mapSize={[1024, 1024]}
+          shadow-bias={-0.001}
+          shadow-normalBias={0.01}
+        />
+      )}
     </group>
   );
 }
@@ -200,6 +293,7 @@ export function Room() {
   const setLayout = useStore(s => s.setLayout);
   const internalStructures = useStore(s => s.internalStructures);
   const gameTime = useStore(s => s.gameTime);
+  const buildMode = useStore(s => s.buildMode);
 
   useEffect(() => {
     // Initialize floorCells for default layout
@@ -418,7 +512,7 @@ export function Room() {
     vertices.add(`${c.x+1},${c.y+1}`);
   });
 
-  const pillars: {px: number, pz: number}[] = [];
+  const pillars: {px: number, pz: number, isOuter: boolean}[] = [];
   vertices.forEach(v => {
     const [vx, vy] = v.split(',').map(Number);
     const TL = isSolid(vx-1, vy-1);
@@ -431,19 +525,19 @@ export function Room() {
 
     // Стовп у верхньому лівому куті відносно вершини (всередині TL клітинки)
     if (!TL && ((BR && !TR && !BL) || (TR && BL))) {
-      pillars.push({ px: px - T/2, pz: pz - T/2 });
+      pillars.push({ px: px - T/2, pz: pz - T/2, isOuter: !TL || !TR || !BL || !BR });
     }
     // Стовп у верхньому правому куті (всередині TR клітинки)
     if (!TR && ((BL && !TL && !BR) || (TL && BR))) {
-      pillars.push({ px: px + T/2, pz: pz - T/2 });
+      pillars.push({ px: px + T/2, pz: pz - T/2, isOuter: !TL || !TR || !BL || !BR });
     }
     // Стовп у нижньому лівому куті (всередині BL клітинки)
     if (!BL && ((TR && !TL && !BR) || (TL && BR))) {
-      pillars.push({ px: px - T/2, pz: pz + T/2 });
+      pillars.push({ px: px - T/2, pz: pz + T/2, isOuter: !TL || !TR || !BL || !BR });
     }
     // Стовп у нижньому правому куті (всередині BR клітинки)
     if (!BR && ((TL && !TR && !BL) || (TR && BL))) {
-      pillars.push({ px: px + T/2, pz: pz + T/2 });
+      pillars.push({ px: px + T/2, pz: pz + T/2, isOuter: !TL || !TR || !BL || !BR });
     }
   });
 
@@ -458,7 +552,7 @@ export function Room() {
   const gridCz = gridD / 2;
 
   // Generate outer walls and initial doors
-  const outerWalls: any[] = [];
+  let rawOuterWalls: any[] = [];
   const initialDoors: any[] = [];
   
   cells.forEach(c => {
@@ -482,7 +576,7 @@ export function Room() {
           : [cx + TILE/2, cz + n.off[1]];
           
         const wallId = `outer-${c.x}-${c.y}-${n.dx}-${n.dz}`;
-        outerWalls.push({
+        rawOuterWalls.push({
           id: wallId,
           type: 'vector_wall',
           material: 'concrete', // Foundation walls
@@ -507,7 +601,8 @@ export function Room() {
             type: c.type === 3 ? 'locked_door' : 'door',
             position: [cx + n.off[0], 0, cz + n.off[1]],
             rotation: doorRot,
-            parentWallId: wallId,
+            parentWallId: wallId, // Will be updated after merge
+            originalWallId: wallId,
             isExit: true
           });
         }
@@ -515,54 +610,203 @@ export function Room() {
     });
   });
 
+  // Merge collinear outer walls
+  const outerWalls: any[] = [];
+  
+  const hWalls = rawOuterWalls.filter(w => Math.abs(w.start[1] - w.end[1]) < 0.01);
+  const vWalls = rawOuterWalls.filter(w => Math.abs(w.start[0] - w.end[0]) < 0.01);
+
+  const hGroups = new Map<number, any[]>();
+  hWalls.forEach(w => {
+    const z = Math.round(w.start[1] * 100) / 100;
+    if (!hGroups.has(z)) hGroups.set(z, []);
+    hGroups.get(z)!.push(w);
+  });
+
+  hGroups.forEach((walls, z) => {
+    walls.sort((a, b) => Math.min(a.start[0], a.end[0]) - Math.min(b.start[0], b.end[0]));
+    let current = { ...walls[0] };
+    let currentIds = [current.id];
+    for (let i = 1; i < walls.length; i++) {
+      const next = walls[i];
+      const currentMaxX = Math.max(current.start[0], current.end[0]);
+      const nextMinX = Math.min(next.start[0], next.end[0]);
+      if (Math.abs(currentMaxX - nextMinX) < 0.01) {
+        current.end = [Math.max(next.start[0], next.end[0]), z];
+        current.start = [Math.min(current.start[0], current.end[0]), z];
+        currentIds.push(next.id);
+      } else {
+        outerWalls.push(current);
+        initialDoors.forEach(d => { if (currentIds.includes(d.originalWallId)) d.parentWallId = current.id; });
+        current = { ...next };
+        currentIds = [current.id];
+      }
+    }
+    outerWalls.push(current);
+    initialDoors.forEach(d => { if (currentIds.includes(d.originalWallId)) d.parentWallId = current.id; });
+  });
+
+  const vGroups = new Map<number, any[]>();
+  vWalls.forEach(w => {
+    const x = Math.round(w.start[0] * 100) / 100;
+    if (!vGroups.has(x)) vGroups.set(x, []);
+    vGroups.get(x)!.push(w);
+  });
+
+  vGroups.forEach((walls, x) => {
+    walls.sort((a, b) => Math.min(a.start[1], a.end[1]) - Math.min(b.start[1], b.end[1]));
+    let current = { ...walls[0] };
+    let currentIds = [current.id];
+    for (let i = 1; i < walls.length; i++) {
+      const next = walls[i];
+      const currentMaxZ = Math.max(current.start[1], current.end[1]);
+      const nextMinZ = Math.min(next.start[1], next.end[1]);
+      if (Math.abs(currentMaxZ - nextMinZ) < 0.01) {
+        current.end = [x, Math.max(next.start[1], next.end[1])];
+        current.start = [x, Math.min(current.start[1], current.end[1])];
+        currentIds.push(next.id);
+      } else {
+        outerWalls.push(current);
+        initialDoors.forEach(d => { if (currentIds.includes(d.originalWallId)) d.parentWallId = current.id; });
+        current = { ...next };
+        currentIds = [current.id];
+      }
+    }
+    outerWalls.push(current);
+    initialDoors.forEach(d => { if (currentIds.includes(d.originalWallId)) d.parentWallId = current.id; });
+  });
+
   const allStructures = [...internalStructures, ...outerWalls, ...initialDoors];
+
+  const floorShapes = useMemo(() => {
+    if (cells.length === 0) return [];
+    
+    const edges: {start: [number, number], end: [number, number]}[] = [];
+    
+    cells.forEach(c => {
+      const cx = (c.x - minX) * TILE + TILE / 2;
+      const cz = (c.y - minY) * TILE + TILE / 2;
+      const t2 = TILE / 2;
+      
+      if (!cellMap.has(`${c.x},${c.y-1}`)) edges.push({ start: [cx - t2, cz - t2], end: [cx + t2, cz - t2] });
+      if (!cellMap.has(`${c.x+1},${c.y}`)) edges.push({ start: [cx + t2, cz - t2], end: [cx + t2, cz + t2] });
+      if (!cellMap.has(`${c.x},${c.y+1}`)) edges.push({ start: [cx + t2, cz + t2], end: [cx - t2, cz + t2] });
+      if (!cellMap.has(`${c.x-1},${c.y}`)) edges.push({ start: [cx - t2, cz + t2], end: [cx - t2, cz - t2] });
+    });
+    
+    const loops: THREE.Vector2[][] = [];
+    const edgeMap = new Map<string, any>();
+    edges.forEach(e => edgeMap.set(`${e.start[0].toFixed(3)},${e.start[1].toFixed(3)}`, e));
+    
+    while(edgeMap.size > 0) {
+      const firstKey = edgeMap.keys().next().value;
+      let currentEdge = edgeMap.get(firstKey);
+      edgeMap.delete(firstKey);
+      
+      const loop: THREE.Vector2[] = [];
+      loop.push(new THREE.Vector2(currentEdge.start[0], currentEdge.start[1]));
+      
+      let currentKey = `${currentEdge.end[0].toFixed(3)},${currentEdge.end[1].toFixed(3)}`;
+      while(edgeMap.has(currentKey)) {
+        currentEdge = edgeMap.get(currentKey);
+        edgeMap.delete(currentKey);
+        loop.push(new THREE.Vector2(currentEdge.start[0], currentEdge.start[1]));
+        currentKey = `${currentEdge.end[0].toFixed(3)},${currentEdge.end[1].toFixed(3)}`;
+      }
+      loops.push(loop);
+    }
+    
+    const shapes: THREE.Shape[] = [];
+    const holes: THREE.Path[] = [];
+    
+    loops.forEach(loop => {
+      let area = 0;
+      for (let i = 0; i < loop.length; i++) {
+        const j = (i + 1) % loop.length;
+        area += loop[i].x * loop[j].y - loop[j].x * loop[i].y;
+      }
+      area = area / 2;
+      
+      if (area > 0) {
+        shapes.push(new THREE.Shape(loop));
+      } else {
+        holes.push(new THREE.Path(loop));
+      }
+    });
+    
+    holes.forEach(hole => {
+      const pt = hole.getPoints()[0];
+      for (const shape of shapes) {
+        const vs = shape.getPoints();
+        let inside = false;
+        for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+          let xi = vs[i].x, yi = vs[i].y;
+          let xj = vs[j].x, yj = vs[j].y;
+          let intersect = ((yi > pt.y) != (yj > pt.y)) && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi);
+          if (intersect) inside = !inside;
+        }
+        if (inside) {
+          shape.holes.push(hole);
+          break;
+        }
+      }
+    });
+    
+    return shapes;
+  }, [cells, minX, minY, cellMap]);
+
+  const totalWindows = allStructures.filter(s => s.type === 'window').length;
 
   return (
     <>
       <RigidBody type="fixed" position={[0, -1, 0]}>
         <CuboidCollider args={[1000, 0.5, 1000]} />
-        <mesh receiveShadow position={[gridCx, 0.5, gridCz]}>
-          <boxGeometry args={[2000, 0.5, 2000]} />
-          <meshStandardMaterial color="#000000" />
-        </mesh>
       </RigidBody>
 
-      {SHOW_GRID && (
+      {SHOW_GRID && buildMode && (
         <gridHelper 
           args={[Math.max(gridW, gridD) + 10, Math.max(gridW, gridD) + 10, '#ff4444', '#444444']} 
           position={[gridCx, 0.01, gridCz]} 
         />
       )}
 
-      {cells.map(cell => {
-        const cx = (cell.x - minX) * TILE + TILE / 2;
-        const cz = (cell.y - minY) * TILE + TILE / 2;
+      {floorShapes.length > 0 && (
+        <group key={`room-geometry-${cells.length}-${minX}-${minY}`}>
+          <RigidBody type="fixed" position={[0, 0, 0]} rotation={[Math.PI/2, 0, 0]}>
+            <mesh receiveShadow>
+              <extrudeGeometry args={[floorShapes, { depth: 0.25, bevelEnabled: false }]} />
+              <meshStandardMaterial color="#8B7355" roughness={0.9} />
+            </mesh>
+          </RigidBody>
 
-        return (
-          <group key={`${cell.x}-${cell.y}`}>
-            <RigidBody type="fixed" position={[cx, -0.05, cz]}>
-              <mesh receiveShadow>
-                <boxGeometry args={[TILE, 0.1, TILE]} />
-                <meshStandardMaterial color="#8B7355" />
-              </mesh>
-            </RigidBody>
+          <RigidBody type="fixed" position={[0, H + 0.25, 0]} rotation={[Math.PI/2, 0, 0]}>
+            <mesh castShadow receiveShadow>
+              <extrudeGeometry args={[floorShapes, { depth: 0.25, bevelEnabled: false }]} />
+              <meshStandardMaterial color="#d4cfc8" roughness={0.9} />
+            </mesh>
+          </RigidBody>
+        </group>
+      )}
 
-            <RigidBody type="fixed" position={[cx, H + 0.05, cz]}>
-              <mesh castShadow receiveShadow>
-                <boxGeometry args={[TILE, 0.1, TILE]} />
-                <meshStandardMaterial color="#d4cfc8" />
-              </mesh>
-            </RigidBody>
-          </group>
-        );
-      })}
-
-      {pillars.map((p, i) => (
-        <SolidWall key={`pillar-${i}`} pos={[p.px, H/2, p.pz]} size={[T, H + 0.2, T]} />
+      {buildMode && pillars.map((p) => (
+        <SolidWall key={`pillar-${p.px}-${p.pz}-${cells.length}`} pos={[p.px, H/2, p.pz]} size={[T + 0.1, H + 0.5, T + 0.1]} />
       ))}
 
       {allStructures.map(struct => {
+        if (struct.type === 'window') {
+          return (
+            <React.Fragment key={`${struct.id}-${cells.length}`}>
+              <Window struct={struct} />
+              {!buildMode && <WindowLight windowStruct={struct} disableSpotLight={totalWindows > 4} />}
+            </React.Fragment>
+          );
+        }
+
         if (struct.type === 'vector_wall' && struct.start && struct.end) {
+          if (!buildMode) {
+            return <CompiledWall key={`compiled-${struct.id}-${cells.length}`} struct={struct} allStructures={allStructures} H={H} T={T} />;
+          }
+
           const dx = struct.end[0] - struct.start[0];
           const dz = struct.end[1] - struct.start[1];
           const len = Math.max(Math.hypot(dx, dz), 0.1);
@@ -576,7 +820,7 @@ export function Room() {
 
           // Find all openings to check for intersections
           const allOpenings = allStructures.filter(s => 
-            (s.type.includes('door') || s.type === 'doorway' || s.type === 'window') && s.parentWallId === struct.id
+            (s.type.includes('door') || s.type === 'doorway') && s.parentWallId === struct.id
           );
 
           const dirX = dx / len;
@@ -638,7 +882,7 @@ export function Room() {
                   <SolidWall 
                     key={`seg-${idx}-${segLen.toFixed(3)}`} 
                     pos={[segCx + offX, H/2, segCz + offZ]} 
-                    size={[segLen, H + 0.2, T]} 
+                    size={[segLen + 0.1, H + 0.5, T]} 
                     rotation={[0, rotY, 0]} 
                     color={color} 
                     userData={{ id: struct.id, type: 'wall' }}
@@ -652,30 +896,15 @@ export function Room() {
                 const intCx = struct.start![0] + dirX * (interval.start + interval.end) / 2;
                 const intCz = struct.start![1] + dirZ * (interval.start + interval.end) / 2;
                 
-                const isWindow = interval.type === 'window';
-                const windowY = interval.y || 1.5;
-                const windowCutoutHeight = 1.3; // 1.2 (glass) + 0.1 (frame top + bottom)
-                
-                const headerH = isWindow ? H - (windowY + windowCutoutHeight / 2) : H - DOOR_H;
+                const headerH = H - DOOR_H;
                 const headerY = H - headerH / 2;
                 
-                const sillH = isWindow ? windowY - windowCutoutHeight / 2 : 0;
-                const sillY = sillH / 2;
-
                 return (
                   <group key={`opening-fill-${idx}`}>
                     {headerH > 0.01 && (
                       <SolidWall 
                         pos={[intCx + offX, headerY + 0.05, intCz + offZ]} 
-                        size={[intLen, headerH + 0.1, T]} 
-                        rotation={[0, rotY, 0]} 
-                        color={color} 
-                      />
-                    )}
-                    {sillH > 0.01 && (
-                      <SolidWall 
-                        pos={[intCx + offX, sillY - 0.05, intCz + offZ]} 
-                        size={[intLen, sillH + 0.1, T]} 
+                        size={[intLen + 0.1, headerH + 0.1, T]} 
                         rotation={[0, rotY, 0]} 
                         color={color} 
                       />
@@ -686,7 +915,7 @@ export function Room() {
 
               {/* Cylinders at joints to hide gaps */}
               {!mergedIntervals.some(inv => 0 >= inv.start && 0 <= inv.end) && (
-                <RigidBody key={`cyl-start-${struct.id}`} type="fixed" position={[struct.start[0] + offX, H/2, struct.start[1] + offZ]}>
+                <RigidBody key={`cyl-start-${struct.id}-${cells.length}`} type="fixed" position={[struct.start[0] + offX, H/2, struct.start[1] + offZ]}>
                   <CylinderCollider args={[(H+0.2)/2, T/2]} />
                   <mesh castShadow receiveShadow>
                     <cylinderGeometry args={[T/2, T/2, H+0.2, 16]} />
@@ -695,7 +924,7 @@ export function Room() {
                 </RigidBody>
               )}
               {!mergedIntervals.some(inv => len >= inv.start && len <= inv.end) && (
-                <RigidBody key={`cyl-end-${struct.id}`} type="fixed" position={[struct.end[0] + offX, H/2, struct.end[1] + offZ]}>
+                <RigidBody key={`cyl-end-${struct.id}-${cells.length}`} type="fixed" position={[struct.end[0] + offX, H/2, struct.end[1] + offZ]}>
                   <CylinderCollider args={[(H+0.2)/2, T/2]} />
                   <mesh castShadow receiveShadow>
                     <cylinderGeometry args={[T/2, T/2, H+0.2, 16]} />
@@ -728,7 +957,7 @@ export function Room() {
             }
           }
           
-          const isExit = false; // Internal doors are not exits
+          const isExit = struct.isExit || false; // Internal doors are not exits
           
           // Automatic logic: if it's in a wall, it slides. Otherwise, it swings.
           const isSliding = !!struct.parentWallId;
@@ -822,9 +1051,7 @@ export function Room() {
           );
         }
 
-        if (struct.type === 'window') {
-          return <Window key={struct.id} struct={struct} />;
-        }
+
 
         if (struct.type === 'wall_light') {
           return (
@@ -833,7 +1060,7 @@ export function Room() {
                 <boxGeometry args={[0.2, 0.1, 0.1]} />
                 <meshStandardMaterial color="#333" />
               </mesh>
-              <pointLight intensity={5} distance={10} decay={2} color="#ffcc88" castShadow shadow-bias={-0.001} />
+              <pointLight intensity={5} distance={10} decay={2} color="#ffcc88" castShadow shadow-bias={-0.0001} />
             </group>
           );
         }
@@ -845,7 +1072,7 @@ export function Room() {
                 <cylinderGeometry args={[0.2, 0.2, 0.05, 16]} />
                 <meshStandardMaterial color="#eee" emissive="#fff" emissiveIntensity={2} />
               </mesh>
-              <pointLight position={[0, -0.2, 0]} intensity={10} distance={20} decay={2} color="#ffffff" castShadow shadow-bias={-0.001} />
+              <pointLight position={[0, -0.2, 0]} intensity={10} distance={20} decay={2} color="#ffffff" castShadow shadow-bias={-0.0001} />
             </group>
           );
         }

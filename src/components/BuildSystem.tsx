@@ -80,8 +80,7 @@ export function BuildSystem() {
     }
 
     if (hitFound) {
-      const isFineSnap = buildTool.startsWith('wall_light') || buildTool.startsWith('ceiling_light');
-      const snapRes = isFineSnap ? 10 : 2;
+      const snapRes = 10; // 0.1m grid for all tools
       let snapX = Math.round(target.x * snapRes) / snapRes;
       let snapZ = Math.round(target.z * snapRes) / snapRes;
 
@@ -90,7 +89,7 @@ export function BuildSystem() {
       const internalWalls = structures.filter(s => s.type === 'vector_wall' && s.start && s.end);
       
       // Calculate outer walls from current layout
-      const outerWalls: any[] = [];
+      let rawOuterWalls: any[] = [];
       const cellMap = new Map<string, boolean>();
       layout.cells.forEach(c => cellMap.set(`${c.x},${c.y}`, true));
       
@@ -115,7 +114,7 @@ export function BuildSystem() {
               ? [cx + n.off[0], cz + TILE/2] 
               : [cx + TILE/2, cz + n.off[1]];
               
-            outerWalls.push({
+            rawOuterWalls.push({
               id: `outer-${c.x}-${c.y}-${n.dx}-${n.dz}`,
               start,
               end,
@@ -125,6 +124,60 @@ export function BuildSystem() {
         });
       });
 
+      const outerWalls: any[] = [];
+      const hWalls = rawOuterWalls.filter(w => Math.abs(w.start[1] - w.end[1]) < 0.01);
+      const vWalls = rawOuterWalls.filter(w => Math.abs(w.start[0] - w.end[0]) < 0.01);
+
+      const hGroups = new Map<number, any[]>();
+      hWalls.forEach(w => {
+        const z = Math.round(w.start[1] * 100) / 100;
+        if (!hGroups.has(z)) hGroups.set(z, []);
+        hGroups.get(z)!.push(w);
+      });
+
+      hGroups.forEach((walls, z) => {
+        walls.sort((a, b) => Math.min(a.start[0], a.end[0]) - Math.min(b.start[0], b.end[0]));
+        let current = { ...walls[0] };
+        for (let i = 1; i < walls.length; i++) {
+          const next = walls[i];
+          const currentMaxX = Math.max(current.start[0], current.end[0]);
+          const nextMinX = Math.min(next.start[0], next.end[0]);
+          if (Math.abs(currentMaxX - nextMinX) < 0.01) {
+            current.end = [Math.max(next.start[0], next.end[0]), z];
+            current.start = [Math.min(current.start[0], current.end[0]), z];
+          } else {
+            outerWalls.push(current);
+            current = { ...next };
+          }
+        }
+        outerWalls.push(current);
+      });
+
+      const vGroups = new Map<number, any[]>();
+      vWalls.forEach(w => {
+        const x = Math.round(w.start[0] * 100) / 100;
+        if (!vGroups.has(x)) vGroups.set(x, []);
+        vGroups.get(x)!.push(w);
+      });
+
+      vGroups.forEach((walls, x) => {
+        walls.sort((a, b) => Math.min(a.start[1], a.end[1]) - Math.min(b.start[1], b.end[1]));
+        let current = { ...walls[0] };
+        for (let i = 1; i < walls.length; i++) {
+          const next = walls[i];
+          const currentMaxZ = Math.max(current.start[1], current.end[1]);
+          const nextMinZ = Math.min(next.start[1], next.end[1]);
+          if (Math.abs(currentMaxZ - nextMinZ) < 0.01) {
+            current.end = [x, Math.max(next.start[1], next.end[1])];
+            current.start = [x, Math.min(current.start[1], current.end[1])];
+          } else {
+            outerWalls.push(current);
+            current = { ...next };
+          }
+        }
+        outerWalls.push(current);
+      });
+
       const walls = [...internalWalls, ...outerWalls];
 
       let closestWall: any = null;
@@ -132,7 +185,7 @@ export function BuildSystem() {
 
       if (buildTool.startsWith('vector_wall')) {
         // Snap to endpoints
-        let minDist = 0.5;
+        let minDist = 0.25;
         walls.forEach(w => {
           const d1 = Math.hypot(w.start![0] - target.x, w.start![1] - target.z);
           if (d1 < minDist) { minDist = d1; snapX = w.start![0]; snapZ = w.start![1]; }

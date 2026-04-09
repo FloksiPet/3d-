@@ -5,6 +5,8 @@ import * as THREE from 'three';
 import { PointerLockControls } from '@react-three/drei';
 import { useStore } from '../store';
 
+import { TILE } from '../constants';
+
 const SPEED = 5;
 const direction = new THREE.Vector3();
 const frontVector = new THREE.Vector3();
@@ -39,6 +41,12 @@ export function Player() {
   const inventoryOpen = useStore(s => s.inventoryOpen);
   const builderOpen = useStore(s => s.builderOpen);
   const buildMode = useStore(s => s.buildMode);
+  
+  const cells = useStore(s => s.layout.cells);
+  const minX = useStore(s => s.layout.minX);
+  const minY = useStore(s => s.layout.minY);
+  const setIsOutside = useStore(s => s.setIsOutside);
+  const isOutsideRef = useRef(false);
 
   const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
@@ -93,6 +101,15 @@ export function Player() {
     // Camera position
     const pos = ref.current ? ref.current.translation() : { x: spawn.pos[0], y: spawn.pos[1], z: spawn.pos[2] };
     camera.position.set(pos.x, pos.y + 0.7, pos.z); // Рівень очей ~1.6м (0.9м центр + 0.7м)
+    
+    // Check if player is outside
+    const gx = Math.floor(pos.x / TILE) + minX;
+    const gy = Math.floor(pos.z / TILE) + minY;
+    const isInside = cells.some(c => c.x === gx && c.y === gy);
+    if (isInside === isOutsideRef.current) {
+      isOutsideRef.current = !isInside;
+      setIsOutside(!isInside);
+    }
 
     // Raycast for interaction
     raycaster.setFromCamera(center, camera);
